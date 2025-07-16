@@ -12,7 +12,7 @@ instance_id   = "default"     # or your custom best-fit instance
 max_cloud     = 20            # %
 
 [imerg]
-base_url = "https://gpm.nasa.gov/PMM_PUB/API"
+base_url = "https://gpm1.gesdisc.eosdis.nasa.gov/data/GPM_L3/GPM_3IMERGHH.07"
 
 [open_meteo]
 base_url = "https://api.open-meteo.com/v1/forecast"
