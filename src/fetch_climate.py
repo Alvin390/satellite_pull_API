@@ -66,7 +66,7 @@ def fetch_openmeteo_data():
         historical = response.Hourly()
         if historical is None or historical.Variables(0) is None:
             logger.warning("No hourly data available in Open-Meteo response")
-            return None, None, None
+            return None, None, None, None
         historical_data = {
             "time": pd.date_range(
                 start=pd.to_datetime(historical.Time(), unit="s", utc=True),
@@ -91,9 +91,27 @@ def fetch_openmeteo_data():
             else:
                 historical_data[key] = np.where(np.isnan(values), 0, values).tolist()
 
+        # Aggregate historical data into daily summaries
+        daily_historical = []
+        for day in range(openmeteo_past_days):
+            start_idx = day * 24
+            end_idx = (day + 1) * 24
+            day_time = (pd.to_datetime(historical_data["time"][0]) - pd.Timedelta(days=openmeteo_past_days - day - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            daily_data = {
+                "date": day_time.strftime("%Y-%m-%d"),
+                "precipitation_total_mm": float(sum(historical_data["precipitation"][start_idx:end_idx]) or 0),
+                "temperature_mean_c": float(np.mean(historical_data["temperature_2m"][start_idx:end_idx]) or 0),
+                "relative_humidity_mean_percent": float(np.mean(historical_data["relative_humidity_2m"][start_idx:end_idx]) or 0),
+                "soil_moisture_mean_m3_m3": float(np.mean(historical_data["soil_moisture_0_to_1cm"][start_idx:end_idx]) or 0),
+                "wind_speed_mean_kmh": float(np.mean(historical_data["wind_speed_10m"][start_idx:end_idx]) or 0),
+                "evapotranspiration_mean_mm": float(np.mean(historical_data["et0_fao_evapotranspiration"][start_idx:end_idx]) or 0)
+            }
+            daily_historical.append(daily_data)
+
         if not historical_data["precipitation"] or all(v == 0 for v in historical_data["precipitation"]):
             logger.warning("No valid precipitation data in Open-Meteo historical response")
             historical_data = None
+            daily_historical = []
         else:
             logger.info("Successfully fetched Open-Meteo historical data")
 
@@ -182,10 +200,10 @@ def fetch_openmeteo_data():
             daily_forecast.append(daily_data)
 
         logger.info("Successfully fetched Open-Meteo forecast")
-        return historical_data, current_data, daily_forecast
+        return historical_data, current_data, daily_forecast, daily_historical
     except Exception as e:
         logger.error(f"Open-Meteo fetch failed: {str(e)}")
-        return None, None, None
+        return None, None, None, None
 
 def fetch_chirps_data():
     date = dt.datetime.now(dt.UTC) - dt.timedelta(days=1)
@@ -219,7 +237,7 @@ def fetch_climate_data():
     logger.info("Starting climate data processing")
 
     # Fetch Open-Meteo data
-    historical, current, forecast = fetch_openmeteo_data()
+    historical, current, forecast, daily_historical = fetch_openmeteo_data()
 
     # Process precipitation
     precip = None
@@ -239,9 +257,9 @@ def fetch_climate_data():
             logger.warning("No precipitation data available; using fallback value 0")
             precip = 0
 
-    return precip, current, forecast
+    return precip, current, forecast, daily_historical
 
 if __name__ == "__main__":
     os.makedirs("data", exist_ok=True)
-    precip, hourly, forecast = fetch_climate_data()
+    precip, hourly, forecast, daily_historical = fetch_climate_data()
     logger.info("Climate data processing complete")

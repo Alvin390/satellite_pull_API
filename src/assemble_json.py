@@ -41,7 +41,7 @@ def convert_types(obj):
     logger.warning(f"Unexpected type in JSON serialization: {type(obj)}")
     return str(obj)
 
-def validate_data(satellite_data, precip, hourly, forecast):
+def validate_data(satellite_data, precip, hourly, forecast, historical):
     valid = True
     if satellite_data is None or not satellite_data[0] or not satellite_data[1]:
         logger.warning("Satellite data is missing or incomplete")
@@ -92,7 +92,24 @@ def validate_data(satellite_data, precip, hourly, forecast):
                     day[field] = 0
                     valid = False
 
-    return valid, hourly, forecast
+    if not isinstance(historical, list):
+        logger.warning(f"Open-Meteo historical data is invalid: got {type(historical)}, expected list")
+        historical = []
+        valid = False
+    else:
+        required_historical_fields = ["date", "precipitation_total_mm", "temperature_mean_c", "relative_humidity_mean_percent", "soil_moisture_mean_m3_m3", "wind_speed_mean_kmh", "evapotranspiration_mean_mm"]
+        for day in historical:
+            if not isinstance(day, dict):
+                logger.warning(f"Invalid historical day: got {type(day)}, expected dict")
+                valid = False
+                continue
+            for field in required_historical_fields:
+                if field not in day:
+                    logger.warning(f"Missing field in Open-Meteo historical: {field}, using default 0")
+                    day[field] = 0
+                    valid = False
+
+    return valid, hourly, forecast, historical
 
 def assemble_json():
     """Assemble and write JSON output."""
@@ -106,10 +123,10 @@ def assemble_json():
         summary, results = satellite_data
 
         # Fetch climate data
-        precip, hourly, forecast = fetch_climate_data()
+        precip, hourly, forecast, historical = fetch_climate_data()
 
-        # Validate data and update hourly/forecast if modified
-        valid, hourly, forecast = validate_data(satellite_data, precip, hourly, forecast)
+        # Validate data and update hourly/forecast/historical if modified
+        valid, hourly, forecast, historical = validate_data(satellite_data, precip, hourly, forecast, historical)
         if not valid:
             logger.warning("Data validation failed; writing JSON with available data")
 
@@ -126,7 +143,8 @@ def assemble_json():
             climate=dict(
                 precipitation_imerg_mm_per_hr=precip if precip is not None else "unavailable",
                 open_meteo_current=hourly,
-                open_meteo_forecast=forecast
+                open_meteo_forecast=forecast,
+                open_meteo_historical=historical
             )
         )
 
