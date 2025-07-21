@@ -61,7 +61,6 @@ tiles = [
     BBox((mid_x, mid_y, east, north), crs=CRS.WGS84)
 ]
 
-# In fetch_satellite.py, after defining tiles
 for i, tile_bbox in enumerate(tiles, 1):
     logger.info(f"Tile {i} BBox: {tile_bbox.min_x}, {tile_bbox.min_y}, {tile_bbox.max_x}, {tile_bbox.max_y}")
 
@@ -83,13 +82,13 @@ def validate_tiff(tiff_path, expected_dtype, expected_shape=(1024, 1024)):
                 logger.warning(f"TIFF {tiff_path} contains all zeros")
                 return False
             if "water_mask" in tiff_path and not np.all(np.isin(data, [0, 1])):
-                logger.warning(f"Water mask TIFF {tiff_path} contains invalid values")
+                logger.warning(f"Water mask TIFF {tiff_path} contains invalid values: min={np.min(data)}, max={np.max(data)}")
                 return False
-            if "turbidity" in tiff_path and np.any(data < -1) or np.any(data > 1):
-                logger.warning(f"Turbidity TIFF {tiff_path} contains out-of-range values")
+            if "turbidity" in tiff_path and (np.any(data < -1) or np.any(data > 1)):
+                logger.warning(f"Turbidity TIFF {tiff_path} contains out-of-range values: min={np.min(data)}, max={np.max(data)}")
                 return False
-            if "chlorophyll" in tiff_path and np.any(data < 0) or np.any(data > 100):
-                logger.warning(f"Chlorophyll TIFF {tiff_path} contains out-of-range values")
+            if "chlorophyll" in tiff_path and (np.any(data < 0) or np.any(data > 100)):
+                logger.warning(f"Chlorophyll TIFF {tiff_path} contains out-of-range values: min={np.min(data)}, max={np.max(data)}")
                 return False
         return True
     except Exception as e:
@@ -102,97 +101,110 @@ def fetch_water_data_for_tile(bbox, tile_id):
     logger.info(f"Starting processing for tile {tile_id}")
     logger.info(f"Tile {tile_id} BBox: {bbox.min_x}, {bbox.min_y}, {bbox.max_x}, {bbox.max_y}")
     end_date = datetime.now(timezone.utc)
-    start_date = end_date - timedelta(days=14)  # Extended to 14 days for better coverage
+    start_date = end_date - timedelta(days=14)
 
     # Calculate pixel size based on bounding box
-    pixel_size_x = (bbox.max_x - bbox.min_x) / 1024 * 111_139  # Meters per degree (approximate)
+    pixel_size_x = (bbox.max_x - bbox.min_x) / 1024 * 111_139
     pixel_size_y = (bbox.max_y - bbox.min_y) / 1024 * 111_139
 
-    # Check for cached TIFFs
+    # Always fetch fresh data (no caching)
     tile_folder = os.path.join(data_folder, f"tile_{tile_id}")
     mask_tiff = os.path.join(tile_folder, "water_mask.tif")
     turbidity_tiff = os.path.join(tile_folder, "turbidity.tif")
     chlorophyll_tiff = os.path.join(tile_folder, "chlorophyll.tif")
-    tiff_files = [mask_tiff, turbidity_tiff, chlorophyll_tiff]
+    os.makedirs(tile_folder, exist_ok=True)
 
-    if all(os.path.isfile(f) for f in tiff_files) and all(
-        validate_tiff(mask_tiff, np.uint8) and
-        validate_tiff(turbidity_tiff, np.float32) and
-        validate_tiff(chlorophyll_tiff, np.float32)
-    ):
-        logger.info(f"Tile {tile_id}: Using cached TIFFs")
-    else:
-        logger.info(f"Tile {tile_id}: Fetching new Sentinel-2 data")
-        try:
-            catalog = SentinelHubCatalog(sh_config)
-            search = catalog.search(
-                collection='sentinel-2-l2a',
-                datetime=f"{start_date.strftime('%Y-%m-%dT%H:%M:%SZ')}/{end_date.strftime('%Y-%m-%dT%H:%M:%SZ')}",
-                limit=1,
-                bbox=bbox,
-                filter=f"eo:cloud_cover < {config_data['sentinelhub']['max_cloud']}"
-            )
-            results_list = list(search)
-            logger.info(f"Tile {tile_id}: Found {len(results_list)} images with cloud cover < {config_data['sentinelhub']['max_cloud']}%")
-            if not results_list:
-                logger.warning(f"Tile {tile_id}: No imagery found")
-                return [], 0
-
-            with open("src/evalscript_wbm.js") as f:
-                evalscript = f.read()
-
-            os.makedirs(tile_folder, exist_ok=True)
-            request = SentinelHubRequest(
-                evalscript=evalscript,
-                input_data=[
-                    SentinelHubRequest.input_data(
-                        data_collection=DataCollection.SENTINEL2_L2A
-                    )
-                ],
-                responses=[
-                    SentinelHubRequest.output_response("water_mask", MimeType.TIFF),
-                    SentinelHubRequest.output_response("turbidity", MimeType.TIFF),
-                    SentinelHubRequest.output_response("chlorophyll", MimeType.TIFF)
-                ],
-                bbox=bbox,
-                size=(1024, 1024),
-                config=sh_config,
-                data_folder=tile_folder
-            )
-            for attempt in range(3):
-                try:
-                    data = request.get_data(save_data=True)
-                    break
-                except Exception as e:
-                    logger.warning(f"Tile {tile_id}: API request failed (attempt {attempt + 1}): {str(e)}")
-                    if attempt == 2:
-                        logger.error(f"Tile {tile_id}: Failed after 3 attempts")
-                        return [], 0
-                    time.sleep(2)
-
-            data_dict = data[0]
-            if isinstance(data_dict.get("water_mask.tif"), np.ndarray):
-                logger.info(f"Tile {tile_id}: Saving API response as TIFFs")
-                transform = from_bounds(bbox.min_x, bbox.min_y, bbox.max_x, bbox.max_y, 1024, 1024)
-                for output_id, array in data_dict.items():
-                    tiff_path = os.path.join(tile_folder, f"{output_id}")
-                    dtype = np.uint8 if output_id == "water_mask.tif" else np.float32
-                    array = array.astype(dtype)
-                    with rasterio.open(
-                        tiff_path,
-                        'w',
-                        driver='GTiff',
-                        height=1024,
-                        width=1024,
-                        count=1,
-                        dtype=dtype,
-                        crs='EPSG:4326',
-                        transform=transform
-                    ) as dst:
-                        dst.write(array, 1)
-        except Exception as e:
-            logger.error(f"Tile {tile_id}: Failed to fetch/process data: {str(e)}")
+    logger.info(f"Tile {tile_id}: Fetching new Sentinel-2 data")
+    try:
+        catalog = SentinelHubCatalog(sh_config)
+        search = catalog.search(
+            collection='sentinel-2-l2a',
+            datetime=f"{start_date.strftime('%Y-%m-%dT%H:%M:%SZ')}/{end_date.strftime('%Y-%m-%dT%H:%M:%SZ')}",
+            limit=1,
+            bbox=bbox,
+            filter=f"eo:cloud_cover < {config_data['sentinelhub']['max_cloud']}"
+        )
+        results_list = list(search)
+        logger.info(f"Tile {tile_id}: Found {len(results_list)} images with cloud cover < {config_data['sentinelhub']['max_cloud']}%")
+        if not results_list:
+            logger.warning(f"Tile {tile_id}: No imagery found")
             return [], 0
+
+        with open("src/evalscript_wbm.js") as f:
+            evalscript = f.read()
+
+        request = SentinelHubRequest(
+            evalscript=evalscript,
+            input_data=[
+                SentinelHubRequest.input_data(
+                    data_collection=DataCollection.SENTINEL2_L2A
+                )
+            ],
+            responses=[
+                SentinelHubRequest.output_response("water_mask", MimeType.TIFF),
+                SentinelHubRequest.output_response("turbidity", MimeType.TIFF),
+                SentinelHubRequest.output_response("chlorophyll", MimeType.TIFF)
+            ],
+            bbox=bbox,
+            size=(1024, 1024),
+            config=sh_config,
+            data_folder=tile_folder
+        )
+        for attempt in range(3):
+            try:
+                data = request.get_data(save_data=True)
+                break
+            except Exception as e:
+                logger.warning(f"Tile {tile_id}: API request failed (attempt {attempt + 1}): {str(e)}")
+                if attempt == 2:
+                    logger.error(f"Tile {tile_id}: Failed after 3 attempts")
+                    return [], 0
+                time.sleep(2)
+
+        data_dict = data[0]
+        if not isinstance(data_dict.get("water_mask.tif"), np.ndarray):
+            logger.error(f"Tile {tile_id}: Invalid API response, no water_mask.tif")
+            return [], 0
+
+        logger.info(f"Tile {tile_id}: Saving API response as TIFFs")
+        transform = from_bounds(bbox.min_x, bbox.min_y, bbox.max_x, bbox.max_y, 1024, 1024)
+        for output_id, array in data_dict.items():
+            tiff_path = os.path.join(tile_folder, f"{output_id}")
+            dtype = np.uint8 if output_id == "water_mask.tif" else np.float32
+            if output_id == "chlorophyll.tif":
+                array = np.clip(array, 0, 100)
+                if np.any(array < 0) or np.any(array > 100):
+                    logger.warning(f"Tile {tile_id}: Chlorophyll values still out of range after clipping: min={np.min(array)}, max={np.max(array)}")
+            if output_id == "turbidity.tif":
+                array = np.clip(array, -1, 1)
+                if np.any(array < -1) or np.any(array > 1):
+                    logger.warning(f"Tile {tile_id}: Turbidity values still out of range after clipping: min={np.min(array)}, max={np.max(array)}")
+            array = array.astype(dtype)
+            with rasterio.open(
+                tiff_path,
+                'w',
+                driver='GTiff',
+                height=1024,
+                width=1024,
+                count=1,
+                dtype=dtype,
+                crs='EPSG:4326',
+                transform=transform
+            ) as dst:
+                dst.write(array, 1)
+
+        # Validate saved TIFFs
+        if not all([
+            validate_tiff(mask_tiff, np.uint8),
+            validate_tiff(turbidity_tiff, np.float32),
+            validate_tiff(chlorophyll_tiff, np.float32)
+        ]):
+            logger.error(f"Tile {tile_id}: Saved TIFFs failed validation")
+            return [], 0
+
+    except Exception as e:
+        logger.error(f"Tile {tile_id}: Failed to fetch/process data: {str(e)}")
+        return [], 0
 
     # Process TIFFs
     results = []
@@ -208,7 +220,7 @@ def fetch_water_data_for_tile(bbox, tile_id):
 
                 for water_id in range(1, n + 1):
                     pixels = (labeled == water_id)
-                    area_m2 = pixels.sum() * pixel_size_x * pixel_size_y  # Moved area calculation here
+                    area_m2 = pixels.sum() * pixel_size_x * pixel_size_y
                     geom_json = next(
                         shapes(
                             pixels.astype(np.uint8),
@@ -247,7 +259,6 @@ def fetch_water_data():
     all_results = []
     total_water_bodies = 0
 
-    # Process tiles in parallel
     with ThreadPoolExecutor(max_workers=4) as executor:
         tile_results = list(executor.map(lambda x: fetch_water_data_for_tile(*x),
                                          [(tile_bbox, i) for i, tile_bbox in enumerate(tiles, 1)]))

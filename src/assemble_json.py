@@ -37,7 +37,7 @@ def convert_types(obj):
     if isinstance(obj, datetime.datetime):
         return obj.isoformat()
     if isinstance(obj, (list, dict)):
-        return obj  # Already JSON-serializable
+        return obj
     logger.warning(f"Unexpected type in JSON serialization: {type(obj)}")
     return str(obj)
 
@@ -63,28 +63,36 @@ def validate_data(satellite_data, precip, hourly, forecast):
     elif precip == 0:
         logger.info("Using fallback precipitation value of 0")
 
-    if hourly is None:
-        logger.warning("Open-Meteo current data is unavailable")
+    if not isinstance(hourly, dict):
+        logger.warning(f"Open-Meteo current data is invalid: got {type(hourly)}, expected dict")
+        hourly = {"time": datetime.datetime.now(datetime.UTC).isoformat()}
         valid = False
     else:
-        required_hourly_fields = ["precipitation", "temperature_2m", "relative_humidity_2m", "evapotranspiration", "soil_moisture_0_1cm", "wind_speed_10m", "time"]
+        required_hourly_fields = ["precipitation", "temperature_2m", "relative_humidity_2m", "soil_moisture_0_to_1cm", "wind_speed_10m", "evapotranspiration", "time"]
         for field in required_hourly_fields:
             if field not in hourly:
-                logger.warning(f"Missing field in Open-Meteo current data: {field}")
+                logger.warning(f"Missing field in Open-Meteo current data: {field}, using default 0")
+                hourly[field] = 0
                 valid = False
 
-    if forecast is None:
-        logger.warning("Open-Meteo forecast data is unavailable")
+    if not isinstance(forecast, list):
+        logger.warning(f"Open-Meteo forecast data is invalid: got {type(forecast)}, expected list")
+        forecast = []
         valid = False
     else:
+        required_forecast_fields = ["date", "precipitation_total_mm", "temperature_mean_c", "relative_humidity_mean_percent", "soil_moisture_mean_m3_m3", "wind_speed_mean_kmh", "evapotranspiration_mean_mm"]
         for day in forecast:
-            required_forecast_fields = ["date", "precipitation_total_mm", "temperature_mean_c", "relative_humidity_mean_percent", "evapotranspiration_mean_mm", "soil_moisture_mean_m3_m3", "wind_speed_mean_kmh"]
+            if not isinstance(day, dict):
+                logger.warning(f"Invalid forecast day: got {type(day)}, expected dict")
+                valid = False
+                continue
             for field in required_forecast_fields:
                 if field not in day:
-                    logger.warning(f"Missing field in Open-Meteo forecast: {field}")
+                    logger.warning(f"Missing field in Open-Meteo forecast: {field}, using default 0")
+                    day[field] = 0
                     valid = False
 
-    return valid
+    return valid, hourly, forecast
 
 def assemble_json():
     """Assemble and write JSON output."""
@@ -100,12 +108,13 @@ def assemble_json():
         # Fetch climate data
         precip, hourly, forecast = fetch_climate_data()
 
-        # Validate data
-        if not validate_data(satellite_data, precip, hourly, forecast):
+        # Validate data and update hourly/forecast if modified
+        valid, hourly, forecast = validate_data(satellite_data, precip, hourly, forecast)
+        if not valid:
             logger.warning("Data validation failed; writing JSON with available data")
 
         # Use Open-Meteo current timestamp if available, else current UTC time
-        timestamp = hourly.get("time", datetime.datetime.now(datetime.UTC).isoformat()) if hourly else datetime.datetime.now(datetime.UTC).isoformat()
+        timestamp = hourly.get("time", datetime.datetime.now(datetime.UTC).isoformat())
 
         # Assemble payload
         payload = dict(
@@ -116,8 +125,8 @@ def assemble_json():
             ),
             climate=dict(
                 precipitation_imerg_mm_per_hr=precip if precip is not None else "unavailable",
-                open_meteo_current=hourly if hourly is not None else "unavailable",
-                open_meteo_forecast=forecast if forecast is not None else "unavailable"
+                open_meteo_current=hourly,
+                open_meteo_forecast=forecast
             )
         )
 

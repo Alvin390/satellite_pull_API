@@ -15,8 +15,9 @@ base_url = "https://api.open-meteo.com/v1/forecast"
 archive_url = "https://archive-api.open-meteo.com/v1/archive"
 latitude = -0.0236
 longitude = 37.9062
-hourly_variables = "precipitation,temperature_2m,relative_humidity_2m,soil_moisture_0_to_10cm,wind_speed_10m"
-forecast_days = 16 # Standard API supports up to 16 days
+hourly_variables = "precipitation,temperature_2m,relative_humidity_2m,soil_moisture_0_to_1cm,wind_speed_10m,et0_fao_evapotranspiration"
+forecast_days = 16
+past_days = 30
 
 [logging]
 log_file = "logs/pipeline.log"
