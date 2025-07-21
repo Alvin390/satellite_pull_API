@@ -1,18 +1,45 @@
+# Bounding box that safely contains Kenya (EPSG:4326, WGS84)
 [area]
-# Bounding box that safely contains Kenya (EPSG:4326)
-west  = 33.50
-south = -5.00
-east  = 42.30
-north = 5.50
+west  = 33.5012  # Western boundary (increased precision)
+south = -5.0024  # Southern boundary
+east  = 42.2987  # Eastern boundary
+north = 5.4986   # Northern boundary
 
+# SentinelHub API configuration
+# Note: Keep client_id and client_secret secure; do not commit to public repositories
 [sentinelhub]
-client_id     = "ba255df2-b7c9-4939-afee-b328b15560b4"
-client_secret = "HS6DfifEJXT0jlazTIXk44XmlfYKAKSK"
-instance_id   = "default"     # or your custom best-fit instance
-max_cloud     = 20            # %
+client_id     = "ba255df2-b7c9-4939-afee-b328b15560b4"  # UUID from SentinelHub dashboard
+client_secret = "HS6DfifEJXT0jlazTIXk44XmlfYKAKSK"  # Secret from SentinelHub dashboard
+instance_id   = "default"                               # Custom instance ID or "default"
+max_cloud     = 20                                      # Maximum cloud cover percentage (%)
 
+# NASA GPM IMERG data configuration
 [imerg]
-base_url = "https://gpm1.gesdisc.eosdis.nasa.gov/data/GPM_L3/GPM_3IMERGHH.07"
+base_url      = "https://gpm1.gesdisc.eosdis.nasa.gov/data/GPM_L3/GPM_3IMERGHH.07"
+version       = "V07B"                                  # IMERG data version
+file_extension = "nc4"                                  # File format (e.g., nc4 or hdf5)
+fallback_days = 30                                      # Number of days to look back for available data
 
+# Earthdata credentials for IMERG access
+[earthdata]
+username = "alvin390"                                   # Earthdata username
+password = "AKariuki@2006"                              # Earthdata password
+
+# Open-Meteo API configuration
 [open_meteo]
-base_url = "https://api.open-meteo.com/v1/forecast"
+base_url        = "https://api.open-meteo.com/v1/forecast"
+latitude        = -0.0236  # Centroid latitude for Kenya
+longitude       = 37.9062  # Centroid longitude for Kenya
+hourly_variables = ["temperature_2m", "relative_humidity_2m", "evapotranspiration", "soil_moisture_0_1cm", "wind_speed_10m", "precipitation"]
+forecast_days   = 14                                    # Number of forecast days
+
+# Logging configuration
+[logging]
+log_file      = "logs/pipeline.log"                     # Path to log file
+log_level     = "INFO"                                  # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+max_size      = 10485760                                # Maximum log file size in bytes (10MB)
+backup_count  = 5                                       # Number of backup log files to keep
+
+# Output configuration
+[output]
+output_file = "output/latest_water_kenya.json"          # Path to output JSON file
