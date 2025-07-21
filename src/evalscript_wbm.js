@@ -22,7 +22,7 @@ function evaluatePixel(sample) {
     // NDWI for water detection: (Green - NIR) / (Green + NIR)
     let ndwi = (sample.B03 - sample.B08) / (sample.B03 + sample.B08 + 0.0001);
     // Confirm water with SWIR (B11) to reduce false positives
-    let isWater = ndwi > 0.3 && sample.B11 < 0.1;
+    let isWater = ndwi > 0.2 && sample.B11 < 0.1;
 
     // NDTI for turbidity: (Red - Green) / (Red + Green)
     let ndti = (sample.B04 - sample.B03) / (sample.B04 + sample.B03 + 0.0001);

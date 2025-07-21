@@ -61,6 +61,10 @@ tiles = [
     BBox((mid_x, mid_y, east, north), crs=CRS.WGS84)
 ]
 
+# In fetch_satellite.py, after defining tiles
+for i, tile_bbox in enumerate(tiles, 1):
+    logger.info(f"Tile {i} BBox: {tile_bbox.min_x}, {tile_bbox.min_y}, {tile_bbox.max_x}, {tile_bbox.max_y}")
+
 # Define data folder for saving TIFFs
 data_folder = "data/sentinel"
 
@@ -96,19 +100,26 @@ def fetch_water_data_for_tile(bbox, tile_id):
     """Fetch and process water data for a single tile."""
     start_time = time.time()
     logger.info(f"Starting processing for tile {tile_id}")
+    logger.info(f"Tile {tile_id} BBox: {bbox.min_x}, {bbox.min_y}, {bbox.max_x}, {bbox.max_y}")
     end_date = datetime.now(timezone.utc)
-    start_date = end_date - timedelta(days=7)
+    start_date = end_date - timedelta(days=14)  # Extended to 14 days for better coverage
+
+    # Calculate pixel size based on bounding box
+    pixel_size_x = (bbox.max_x - bbox.min_x) / 1024 * 111_139  # Meters per degree (approximate)
+    pixel_size_y = (bbox.max_y - bbox.min_y) / 1024 * 111_139
 
     # Check for cached TIFFs
     tile_folder = os.path.join(data_folder, f"tile_{tile_id}")
     mask_tiff = os.path.join(tile_folder, "water_mask.tif")
     turbidity_tiff = os.path.join(tile_folder, "turbidity.tif")
     chlorophyll_tiff = os.path.join(tile_folder, "chlorophyll.tif")
-
     tiff_files = [mask_tiff, turbidity_tiff, chlorophyll_tiff]
-    if all(os.path.isfile(f) for f in tiff_files) and all(validate_tiff(mask_tiff, np.uint8) and
-                                                          validate_tiff(turbidity_tiff, np.float32) and
-                                                          validate_tiff(chlorophyll_tiff, np.float32)):
+
+    if all(os.path.isfile(f) for f in tiff_files) and all(
+        validate_tiff(mask_tiff, np.uint8) and
+        validate_tiff(turbidity_tiff, np.float32) and
+        validate_tiff(chlorophyll_tiff, np.float32)
+    ):
         logger.info(f"Tile {tile_id}: Using cached TIFFs")
     else:
         logger.info(f"Tile {tile_id}: Fetching new Sentinel-2 data")
@@ -122,11 +133,11 @@ def fetch_water_data_for_tile(bbox, tile_id):
                 filter=f"eo:cloud_cover < {config_data['sentinelhub']['max_cloud']}"
             )
             results_list = list(search)
+            logger.info(f"Tile {tile_id}: Found {len(results_list)} images with cloud cover < {config_data['sentinelhub']['max_cloud']}%")
             if not results_list:
                 logger.warning(f"Tile {tile_id}: No imagery found")
                 return [], 0
 
-            # Create data request
             with open("src/evalscript_wbm.js") as f:
                 evalscript = f.read()
 
@@ -144,11 +155,11 @@ def fetch_water_data_for_tile(bbox, tile_id):
                     SentinelHubRequest.output_response("chlorophyll", MimeType.TIFF)
                 ],
                 bbox=bbox,
-                size=(1024, 1024),  # Maintain original resolution
+                size=(1024, 1024),
                 config=sh_config,
                 data_folder=tile_folder
             )
-            for attempt in range(3):  # Retry up to 3 times
+            for attempt in range(3):
                 try:
                     data = request.get_data(save_data=True)
                     break
@@ -159,11 +170,6 @@ def fetch_water_data_for_tile(bbox, tile_id):
                         return [], 0
                     time.sleep(2)
 
-            # Validate API response
-            if not isinstance(data, list) or not data or not isinstance(data[0], dict):
-                logger.error(f"Tile {tile_id}: Invalid API response: {type(data)}")
-                return [], 0
-
             data_dict = data[0]
             if isinstance(data_dict.get("water_mask.tif"), np.ndarray):
                 logger.info(f"Tile {tile_id}: Saving API response as TIFFs")
@@ -173,25 +179,19 @@ def fetch_water_data_for_tile(bbox, tile_id):
                     dtype = np.uint8 if output_id == "water_mask.tif" else np.float32
                     array = array.astype(dtype)
                     with rasterio.open(
-                            tiff_path,
-                            'w',
-                            driver='GTiff',
-                            height=1024,
-                            width=1024,
-                            count=1,
-                            dtype=dtype,
-                            crs='EPSG:4326',
-                            transform=transform
+                        tiff_path,
+                        'w',
+                        driver='GTiff',
+                        height=1024,
+                        width=1024,
+                        count=1,
+                        dtype=dtype,
+                        crs='EPSG:4326',
+                        transform=transform
                     ) as dst:
                         dst.write(array, 1)
         except Exception as e:
             logger.error(f"Tile {tile_id}: Failed to fetch/process data: {str(e)}")
-            return [], 0
-
-    # Verify file paths
-    for tiff_file in tiff_files:
-        if not os.path.isfile(tiff_file):
-            logger.error(f"Tile {tile_id}: TIFF file not found: {tiff_file}")
             return [], 0
 
     # Process TIFFs
@@ -208,7 +208,7 @@ def fetch_water_data_for_tile(bbox, tile_id):
 
                 for water_id in range(1, n + 1):
                     pixels = (labeled == water_id)
-                    area_m2 = pixels.sum() * 100  # 10m x 10m pixel = 100m² at 1024x1024
+                    area_m2 = pixels.sum() * pixel_size_x * pixel_size_y  # Moved area calculation here
                     geom_json = next(
                         shapes(
                             pixels.astype(np.uint8),
@@ -219,13 +219,12 @@ def fetch_water_data_for_tile(bbox, tile_id):
                     mean_turbidity = np.mean(turbidity[pixels]) if pixels.any() else 0
                     mean_chlorophyll = np.mean(chlorophyll[pixels]) if pixels.any() else 0
 
-                    # Validate data ranges
                     if mean_turbidity < -1 or mean_turbidity > 1:
                         logger.warning(f"Tile {tile_id}_{water_id}: Invalid turbidity value: {mean_turbidity}")
-                        mean_turbidity = max(0, min(mean_turbidity, 1))  # Clamp to [0, 1]
+                        mean_turbidity = max(0, min(mean_turbidity, 1))
                     if mean_chlorophyll < 0 or mean_chlorophyll > 100:
                         logger.warning(f"Tile {tile_id}_{water_id}: Invalid chlorophyll value: {mean_chlorophyll}")
-                        mean_chlorophyll = max(0, min(mean_chlorophyll, 100))  # Clamp to [0, 100]
+                        mean_chlorophyll = max(0, min(mean_chlorophyll, 100))
 
                     results.append(dict(
                         id=f"{tile_id}_{water_id}",

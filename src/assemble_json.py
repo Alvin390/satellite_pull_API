@@ -42,7 +42,6 @@ def convert_types(obj):
     return str(obj)
 
 def validate_data(satellite_data, precip, hourly, forecast):
-    """Validate data before writing to JSON."""
     valid = True
     if satellite_data is None or not satellite_data[0] or not satellite_data[1]:
         logger.warning("Satellite data is missing or incomplete")
@@ -59,15 +58,16 @@ def validate_data(satellite_data, precip, hourly, forecast):
             valid = False
 
     if precip is None:
-        logger.warning("IMERG precipitation data is unavailable")
+        logger.warning("Precipitation data is unavailable")
         valid = False
+    elif precip == 0:
+        logger.info("Using fallback precipitation value of 0")
 
     if hourly is None:
         logger.warning("Open-Meteo current data is unavailable")
         valid = False
     else:
-        required_hourly_fields = ["temperature_2m", "relative_humidity_2m", "evapotranspiration",
-                                 "soil_moisture_0_1cm", "wind_speed_10m", "precipitation", "time"]
+        required_hourly_fields = ["precipitation", "temperature_2m", "relative_humidity_2m", "evapotranspiration", "soil_moisture_0_1cm", "wind_speed_10m", "time"]
         for field in required_hourly_fields:
             if field not in hourly:
                 logger.warning(f"Missing field in Open-Meteo current data: {field}")
@@ -78,9 +78,7 @@ def validate_data(satellite_data, precip, hourly, forecast):
         valid = False
     else:
         for day in forecast:
-            required_forecast_fields = ["date", "precipitation_total_mm", "temperature_mean_c",
-                                       "relative_humidity_mean_percent", "evapotranspiration_mean_mm",
-                                       "soil_moisture_mean_m3_m3", "wind_speed_mean_kmh"]
+            required_forecast_fields = ["date", "precipitation_total_mm", "temperature_mean_c", "relative_humidity_mean_percent", "evapotranspiration_mean_mm", "soil_moisture_mean_m3_m3", "wind_speed_mean_kmh"]
             for field in required_forecast_fields:
                 if field not in day:
                     logger.warning(f"Missing field in Open-Meteo forecast: {field}")
